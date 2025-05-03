@@ -15,7 +15,7 @@
   "icons": {
     "128": "icon-128.png"
   },
-  "permissions": ["activeTab"],
+  "permissions": ["activeTab", "scripting"],
   "content_scripts": [
     {
       "matches": ["http://*/*", "https://*/*", "<all_urls>"],
@@ -25,8 +25,13 @@
   ],
   "web_accessible_resources": [
     {
-      "resources": ["contentStyle.css", "icon-128.png", "icon-32.png"],
-      "matches": []
+      "resources": [
+        "contentStyle.css",
+        "icon-128.png",
+        "icon-32.png",
+        "src/vendor/rrweb.min.js"
+      ],
+      "matches": ["<all_urls>"]
     }
   ]
 }
