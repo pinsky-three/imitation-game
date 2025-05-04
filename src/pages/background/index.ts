@@ -49,13 +49,13 @@ function pageStartRecording() {
 }
 
 function pageStopRecording() {
-  // Same function as before in Popup.tsx
   if (window.rrwebStopFn) {
     console.log("[Page] Stopping rrweb recording via Background...");
     window.rrwebStopFn();
     window.rrwebStopFn = undefined;
+    // No longer need to send payload, events are sent individually
     window.postMessage(
-      { type: "RECORDING_STOPPED_FROM_PAGE", payload: window.rrwebEvents },
+      { type: "RECORDING_STOPPED_FROM_PAGE" /* payload removed */ },
       "*"
     );
     console.log("[Page] rrweb recording stopped.");
@@ -198,12 +198,47 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         "Background received RECORDING_STOPPED without active tab state"
       );
     }
-    // Optionally save events from payload if needed, though they are already stored
+    // No payload to handle here anymore
     // No response needed
   }
 
   // Return true if you intend to use sendResponse asynchronously (like for executeScript)
   // Return false or undefined otherwise.
+});
+
+// --- Listener for Tab Navigation ---
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  // Check if the tab update is complete and the tab is being recorded
+  if (changeInfo.status === "complete" && recordingState[tabId]?.isRecording) {
+    console.log(
+      `Detected navigation complete in recorded tab ${tabId}. Re-injecting recorder.`
+    );
+
+    // Ensure content script is ready (might need a small delay, though usually okay)
+    // Small delay to ensure content script and rrweb library injection have likely run
+    setTimeout(() => {
+      chrome.scripting
+        .executeScript({
+          target: { tabId: tabId },
+          func: pageStartRecording, // Re-run the start recording logic
+          world: "MAIN",
+        })
+        .then(() => {
+          console.log(
+            `Background re-executed start script in tab ${tabId} after navigation.`
+          );
+          // isRecording state is already true, confirmation will come via postMessage
+        })
+        .catch((err) => {
+          // Log error, but potentially keep state as recording?
+          // User might fix the page and expect recording to resume.
+          console.error(
+            `Background failed to re-execute start script in tab ${tabId} after navigation:`,
+            err
+          );
+        });
+    }, 100); // 100ms delay, adjust if needed
+  }
 });
 
 console.log("Background script listeners attached.");
