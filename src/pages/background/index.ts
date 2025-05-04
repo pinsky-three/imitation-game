@@ -26,7 +26,9 @@ function pageStartRecording() {
     return;
   }
   window.rrwebEvents = [];
-  console.log("[Page] Starting rrweb recording via Background...");
+  console.log(
+    "[Page] Starting rrweb recording via Background with sampling..."
+  );
   try {
     window.rrwebStopFn = window.rrweb.record({
       emit(event: any) {
@@ -34,6 +36,10 @@ function pageStartRecording() {
           { type: "RRWEB_EVENT_FROM_PAGE", payload: event },
           "*"
         );
+      },
+      sampling: {
+        mousemove: 100,
+        scroll: 150,
       },
     });
     window.postMessage({ type: "RECORDING_STARTED_FROM_PAGE" }, "*");
