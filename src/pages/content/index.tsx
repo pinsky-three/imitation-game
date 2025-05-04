@@ -95,57 +95,50 @@ function pageStopRecording() {
   }
 }
 
-// --- Listener for messages FROM the page context (injected scripts) ---
+// --- Listener for messages FROM the page context ---
 window.addEventListener("message", (event) => {
   // We only accept messages from ourselves
   if (event.source !== window) {
     return;
   }
-
   const message = event.data;
 
+  // Relay messages to the BACKGROUND script
   if (message && message.type === "RRWEB_EVENT_FROM_PAGE") {
-    // Forward event to the popup
-    // console.log('Content script forwarding event to popup:', message.payload);
+    // console.log('Content script relaying event to background');
     chrome.runtime.sendMessage({
       type: "RRWEB_EVENT",
       payload: message.payload,
     });
   } else if (message && message.type === "RECORDING_STARTED_FROM_PAGE") {
-    console.log(
-      "Content script notifying popup: Recording started (via postMessage)."
-    );
-    isPageRecording = true; // Update state based on page confirmation
+    console.log("Content script relaying: Recording started to background.");
     chrome.runtime.sendMessage({ type: "RECORDING_STARTED" });
   } else if (message && message.type === "RECORDING_STOPPED_FROM_PAGE") {
-    console.log(
-      "Content script notifying popup: Recording stopped (via postMessage)."
-    );
-    isPageRecording = false; // Update state based on page confirmation
+    console.log("Content script relaying: Recording stopped to background.");
     chrome.runtime.sendMessage({
       type: "RECORDING_STOPPED",
-      payload: message.payload /* might be useful later */,
+      payload: message.payload,
     });
   }
 });
 
-// --- Keep existing React rendering logic ---
+// --- Remove React rendering logic or keep minimal ---
+// This component doesn't need to render much anymore
 const div = document.createElement("div");
-div.id = "__root";
+div.id = "__root_recorder_content"; // Use a unique ID
+div.style.display = "none"; // Make it hidden
 document.body.appendChild(div);
+// Optional: Add a console log to confirm content script is running
+console.log("Imitation Game: Content script active and relaying messages.");
 
+// Remove the previous root.render call if it's not needed
+/*
 const rootContainer = document.querySelector("#__root");
 if (!rootContainer) throw new Error("Can't find Content root element");
 const root = createRoot(rootContainer);
-
 root.render(
   <div className="absolute top-0 left-0 text-lg text-black bg-amber-400 z-50 opacity-50 pointer-events-none">
     recorder active
   </div>
 );
-
-try {
-  // console.log("content script loaded");
-} catch (e) {
-  console.error(e);
-}
+*/

@@ -1,239 +1,227 @@
 import React, { useState, useRef, useEffect } from "react";
-import "./index.css"; // Assuming your Tailwind/popup styles are here
-import "../../assets/styles/rrweb.css"; // Use relative path
+import "./index.css"; // Keep local popup styles
+// import "../../assets/styles/rrweb.css"; // Remove rrweb CSS import for now
 
-// Placeholder type - you might want more specific types later
-type RRWebEvent = object;
+type RRWebEvent = object; // Keep for type hint if background sends events
 
-// --- Functions to Execute in Page Context ---
-// These are defined here so they can be passed to executeScript
-// They will run in the MAIN world of the target page.
-
-function pageStartRecording() {
-  // Access window properties directly as this runs in the page context
-  if (typeof window.rrweb === "undefined") {
-    console.error("[Page] window.rrweb not found!");
-    return; // Exit if rrweb isn't loaded
-  }
-  if (window.rrwebStopFn) {
-    console.warn("[Page] Recording seems to be already in progress.");
-    return; // Avoid starting multiple recordings
-  }
-  window.rrwebEvents = []; // Reset page-level event store
-  console.log("[Page] Starting rrweb recording via executeScript...");
-  try {
-    window.rrwebStopFn = window.rrweb.record({
-      emit(event: any) {
-        // Send event back to content script immediately via postMessage
-        window.postMessage(
-          { type: "RRWEB_EVENT_FROM_PAGE", payload: event },
-          "*"
-        );
-      },
-    });
-    console.log("[Page] rrweb recording started.");
-    // Send confirmation back via postMessage
-    window.postMessage({ type: "RECORDING_STARTED_FROM_PAGE" }, "*");
-  } catch (error) {
-    console.error("[Page] Failed to start rrweb recording:", error);
-  }
-}
-
-function pageStopRecording() {
-  if (window.rrwebStopFn) {
-    console.log("[Page] Stopping rrweb recording via executeScript...");
-    window.rrwebStopFn(); // Call the stop function
-    window.rrwebStopFn = undefined; // Clear the stop function reference
-    console.log("[Page] rrweb recording stopped.");
-    // Send confirmation and events back via postMessage
-    window.postMessage(
-      { type: "RECORDING_STOPPED_FROM_PAGE", payload: window.rrwebEvents },
-      "*"
-    );
-  } else {
-    console.warn("[Page] Stop function not found. Cannot stop.");
-  }
-}
+// REMOVE page context functions
 
 // --- Popup Component ---
 const Popup = () => {
   const [isRecording, setIsRecording] = useState<boolean>(false);
-  const [events, setEvents] = useState<RRWebEvent[]>([]);
-  const [canReplay, setCanReplay] = useState<boolean>(false);
-  const replayContainerRef = useRef<HTMLDivElement>(null);
-  const replayerRef = useRef<any>(null); // To hold the rrweb replayer instance
+  // const [events, setEvents] = useState<RRWebEvent[]>([]); // Remove local events state
+  const [eventCount, setEventCount] = useState<number>(0);
+  const [canExport, setCanExport] = useState<boolean>(false); // State for export button
+  const [currentTabId, setCurrentTabId] = useState<number | null>(null);
+  // const replayContainerRef = useRef<HTMLDivElement>(null); // Remove replay ref
+  // const replayerRef = useRef<any>(null); // Remove replay ref
 
-  // Listener for status/events relayed from content script
+  // Get current Tab ID and request initial state
   useEffect(() => {
-    const messageListener = (
-      message: any,
-      sender: chrome.runtime.MessageSender
-    ) => {
-      if (message.type === "RRWEB_EVENT") {
-        console.log("Popup received relayed event:", message.payload);
-        setEvents((prevEvents) => [...prevEvents, message.payload]);
-      } else if (message.type === "RECORDING_STARTED") {
-        console.log("Popup notified: Recording started");
-        setIsRecording(true);
-        setCanReplay(false);
-        setEvents([]);
-      } else if (message.type === "RECORDING_STOPPED") {
-        console.log("Popup notified: Recording stopped");
-        setIsRecording(false);
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      const tabId = tabs[0]?.id;
+      if (tabId) {
+        setCurrentTabId(tabId);
+        console.log(`Popup requesting state for tab ${tabId}`);
+        chrome.runtime.sendMessage(
+          { type: "REQUEST_STATE", tabId: tabId },
+          (response) => {
+            if (chrome.runtime.lastError) {
+              console.error(
+                "Error requesting state:",
+                chrome.runtime.lastError.message
+              );
+              return;
+            }
+            console.log("Popup received initial state:", response);
+            if (response) {
+              setIsRecording(response.isRecording);
+              const count = response.eventCount || 0;
+              setEventCount(count);
+              setCanExport(!response.isRecording && count > 0); // Can export if stopped and events exist
+            }
+          }
+        );
+      } else {
+        console.error("Popup could not get active tab ID on load.");
+      }
+    });
+  }, []);
+
+  // Simpler Listener for pushed state updates from background (if implemented)
+  useEffect(() => {
+    const messageListener = (message: any) => {
+      if (message.tabId && message.tabId !== currentTabId) return;
+      if (message.type === "RECORDING_STATE_UPDATED") {
+        console.log("Popup received pushed state:", message);
+        setIsRecording(message.isRecording);
+        const count = message.eventCount || 0;
+        setEventCount(count);
+        setCanExport(!message.isRecording && count > 0);
       }
     };
     chrome.runtime.onMessage.addListener(messageListener);
     return () => {
       chrome.runtime.onMessage.removeListener(messageListener);
     };
-  }, []);
+  }, [currentTabId]);
 
-  // Effect to update canReplay based on events length
+  // Effect to update canExport whenever isRecording or eventCount changes
   useEffect(() => {
-    setCanReplay(!isRecording && events.length > 1);
-  }, [isRecording, events]);
-
-  const executeScriptInPage = (funcToExecute: (...args: any[]) => any) => {
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      if (tabs[0]?.id) {
-        const tabId = tabs[0].id;
-        chrome.scripting
-          .executeScript({
-            target: { tabId: tabId },
-            func: funcToExecute,
-            world: "MAIN", // Execute in the page's context
-          })
-          .then(() => {
-            console.log(
-              `Popup executed script for ${funcToExecute.name} in tab ${tabId}`
-            );
-          })
-          .catch((err) => {
-            console.error(
-              `Popup failed to execute script for ${funcToExecute.name} in tab ${tabId}:`,
-              err
-            );
-            alert(
-              `Failed to execute script in the page. Error: ${err.message}. Ensure the page is not protected (e.g., chrome://) and try reloading.`
-            );
-            // Potentially reset state if execution fails fundamentally
-            setIsRecording(false);
-          });
-      } else {
-        console.error("Popup could not find active tab ID.");
-        alert("Could not find the active tab. Please try again.");
-      }
-    });
-  };
+    setCanExport(!isRecording && eventCount > 0);
+  }, [isRecording, eventCount]);
 
   const handleStart = () => {
-    // Clear previous replay instance if exists
-    if (replayerRef.current) {
-      try {
-        replayerRef.current.pause();
-      } catch (e) {
-        /* ignore */
+    if (!currentTabId) {
+      alert("Cannot find active tab.");
+      return;
+    }
+    console.log(
+      `Popup sending START_RECORDING to background for tab ${currentTabId}`
+    );
+    chrome.runtime.sendMessage(
+      { type: "START_RECORDING", tabId: currentTabId },
+      (response) => {
+        if (chrome.runtime.lastError || !response?.success) {
+          console.error(
+            "Start command failed:",
+            response?.error || chrome.runtime.lastError?.message
+          );
+          alert(
+            `Failed to start recording: ${response?.error || "Unknown error"}`
+          );
+        } else {
+          console.log("Start command acknowledged by background.");
+          setIsRecording(true);
+          setEventCount(0);
+          setCanExport(false);
+        }
       }
-      replayerRef.current = null;
-    }
-    if (replayContainerRef.current) {
-      replayContainerRef.current.innerHTML = ""; // Clear visual replay
-    }
-
-    console.log("Popup triggering START recording via executeScript...");
-    setEvents([]); // Clear events before starting
-    // State updates will be triggered by messages from the page/content script
-    executeScriptInPage(pageStartRecording);
+    );
   };
 
   const handleStop = () => {
-    console.log("Popup triggering STOP recording via executeScript...");
-    // State updates will be triggered by messages from the page/content script
-    executeScriptInPage(pageStopRecording);
+    if (!currentTabId) {
+      alert("Cannot find active tab.");
+      return;
+    }
+    console.log(
+      `Popup sending STOP_RECORDING to background for tab ${currentTabId}`
+    );
+    chrome.runtime.sendMessage(
+      { type: "STOP_RECORDING", tabId: currentTabId },
+      (response) => {
+        if (chrome.runtime.lastError || !response?.success) {
+          console.error(
+            "Stop command failed:",
+            response?.error || chrome.runtime.lastError?.message
+          );
+          alert(
+            `Failed to stop recording: ${response?.error || "Unknown error"}`
+          );
+        } else {
+          console.log("Stop command acknowledged by background.");
+          setIsRecording(false);
+          // We don't know event count yet, background will update it
+          // setCanExport will update via useEffect
+        }
+      }
+    );
   };
 
-  const handleReplay = async () => {
-    if (events.length < 2 || !replayContainerRef.current) {
-      alert("Not enough events recorded or replay container missing.");
+  // REMOVED handleReplay function
+
+  // Function to trigger JSON download
+  function downloadJson(data: any, filename: string) {
+    const jsonStr = JSON.stringify(data, null, 2); // Pretty print JSON
+    const blob = new Blob([jsonStr], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a); // Required for Firefox
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  const handleExport = () => {
+    if (!currentTabId) {
+      alert("Cannot find active tab for export.");
       return;
     }
-    if (typeof window.rrweb === "undefined") {
-      console.error("rrweb not found in popup context!");
-      alert("Replay library (rrweb) not loaded in the popup.");
+    if (isRecording) {
+      alert("Please stop recording before exporting.");
       return;
     }
-    // Clear previous replay if any
-    if (replayerRef.current) {
-      try {
-        replayerRef.current.pause();
-      } catch (e) {
-        /* ignore */
+
+    console.log(`Popup requesting events for export for tab ${currentTabId}`);
+    chrome.runtime.sendMessage(
+      { type: "REQUEST_EVENTS_FOR_EXPORT", tabId: currentTabId },
+      (response) => {
+        if (chrome.runtime.lastError || !response?.events) {
+          console.error(
+            "Failed to get events for export:",
+            response?.error || chrome.runtime.lastError?.message
+          );
+          alert(
+            `Could not retrieve events for export: ${
+              response?.error || "Unknown error"
+            }`
+          );
+          return;
+        }
+        if (response.events.length === 0) {
+          alert("No events recorded to export.");
+          return;
+        }
+        const filename = `rrweb-recording-${currentTabId}-${new Date().toISOString()}.json`;
+        downloadJson(response.events, filename);
       }
-    }
-    replayContainerRef.current.innerHTML = ""; // Clear the container visually
-
-    console.log(`Replaying ${events.length} events.`);
-
-    try {
-      const Replayer = window.rrweb.Replayer;
-      replayerRef.current = new Replayer(events, {
-        root: replayContainerRef.current,
-        skipInactive: true,
-      });
-
-      replayerRef.current.on("finish", () => {
-        console.log("Replay finished.");
-        // Optionally re-enable the replay button or provide feedback
-      });
-
-      replayerRef.current.play();
-    } catch (error) {
-      console.error("Error initializing or playing replay:", error);
-      alert(`Replay failed: ${error}`);
-    }
+    );
   };
 
   return (
-    <div className="popup-container p-4 w-80">
+    <div className="popup-container p-4 w-80 text-black">
       <h1 className="text-xl font-bold mb-4">Session Recorder</h1>
-      <div className="controls space-x-2 mb-4">
+      <div className="controls flex space-x-2 mb-4">
         <button
           onClick={handleStart}
           disabled={isRecording}
-          className="px-4 py-2 bg-green-500 text-white rounded disabled:opacity-50"
+          className="px-3 py-1 bg-green-500 text-white rounded disabled:opacity-50"
         >
-          Start Recording
+          Start
         </button>
         <button
           onClick={handleStop}
           disabled={!isRecording}
-          className="px-4 py-2 bg-red-500 text-white rounded disabled:opacity-50"
+          className="px-3 py-1 bg-red-500 text-white rounded disabled:opacity-50"
         >
-          Stop Recording
+          Stop
         </button>
         <button
-          onClick={handleReplay}
-          disabled={isRecording || !canReplay}
-          className="px-4 py-2 bg-blue-500 text-white rounded disabled:opacity-50"
+          onClick={handleExport}
+          disabled={isRecording || !canExport}
+          className="px-3 py-1 bg-blue-500 text-white rounded disabled:opacity-50"
         >
-          Replay Recording
+          Export JSON
         </button>
       </div>
-
-      <p className="text-sm mb-1">
+      <p className="text-sm">
         Status: {isRecording ? "Recording..." : "Stopped"}
       </p>
-      <p className="text-sm mb-2">Events captured: {events.length}</p>
-
-      <div
-        id="replay-container"
-        ref={replayContainerRef}
-        className="w-full h-64 border border-gray-300 bg-gray-100 overflow-auto"
-      >
-        {/* rrweb replayer will attach here */}
-      </div>
+      <p className="text-sm">Events captured: {eventCount}</p>
+      {/* Remove replay container */}
+      {/* <div id="replay-container" ref={replayContainerRef} className="w-full h-64 border border-gray-300 bg-gray-100 overflow-auto"></div> */}
     </div>
   );
 };
 
 export default Popup;
+
+// Remove global declarations if no longer needed for replay
+/*
+declare global {
+  interface Window { ... }
+}
+*/
